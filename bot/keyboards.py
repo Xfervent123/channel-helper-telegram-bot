@@ -1,46 +1,65 @@
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 
-def get_main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
+def get_main_menu_kb(is_admin: bool = False, pending_count: int = 0) -> InlineKeyboardMarkup:
     """Главное меню"""
     builder = InlineKeyboardBuilder()
     
-    builder.row(
-        InlineKeyboardButton(text="📝 Предложить новость", callback_data="submit_news")
-    )
-    builder.row(
-        InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats")
-    )
-    
     if is_admin:
+        # Админ-панель распакована
+        pending_text = f"📬 Ожидающие ({pending_count})" if pending_count > 0 else "📭 Нет ожидающих"
+        
         builder.row(
-            InlineKeyboardButton(text="⚙️ Админ-панель", callback_data="admin_panel")
+            InlineKeyboardButton(text=pending_text, callback_data="view_pending")
+        )
+        builder.row(
+            InlineKeyboardButton(text="🔗 Сменить канал", callback_data="change_channel")
+        )
+        builder.row(
+            InlineKeyboardButton(text="📊 Статистика бота", callback_data="bot_stats")
+        )
+    else:
+        # Обычное меню пользователя
+        builder.row(
+            InlineKeyboardButton(text="📝 Предложить новость", callback_data="submit_news")
+        )
+        builder.row(
+            InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats")
         )
     
     return builder.as_markup()
 
 
-def get_admin_panel_kb(pending_count: int = 0) -> InlineKeyboardMarkup:
-    """Админ-панель"""
-    builder = InlineKeyboardBuilder()
-    
-    pending_text = f"📬 Ожидающие ({pending_count})" if pending_count > 0 else "📭 Нет ожидающих"
+def get_user_quick_commands_kb() -> ReplyKeyboardMarkup:
+    """Быстрые команды для пользователя"""
+    builder = ReplyKeyboardBuilder()
     
     builder.row(
-        InlineKeyboardButton(text=pending_text, callback_data="view_pending")
+        KeyboardButton(text="📝 Предложить новость"),
+        KeyboardButton(text="📊 Моя статистика")
     )
     builder.row(
-        InlineKeyboardButton(text="🔗 Сменить канал", callback_data="change_channel")
-    )
-    builder.row(
-        InlineKeyboardButton(text="📊 Статистика бота", callback_data="bot_stats")
-    )
-    builder.row(
-        InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_main")
+        KeyboardButton(text="📋 Главное меню")
     )
     
-    return builder.as_markup()
+    return builder.as_markup(resize_keyboard=True)
+
+
+def get_admin_quick_commands_kb() -> ReplyKeyboardMarkup:
+    """Быстрые команды для администратора"""
+    builder = ReplyKeyboardBuilder()
+    
+    builder.row(
+        KeyboardButton(text="📬 Ожидающие"),
+        KeyboardButton(text="📊 Статистика")
+    )
+    builder.row(
+        KeyboardButton(text="🔗 Сменить канал"),
+        KeyboardButton(text="📋 Главное меню")
+    )
+    
+    return builder.as_markup(resize_keyboard=True)
 
 
 def get_forward_choice_kb() -> InlineKeyboardMarkup:
