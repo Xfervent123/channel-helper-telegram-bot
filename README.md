@@ -1,4 +1,4 @@
-# channel-helper-telegram-bot
+# Channel Helper telegram bot
 
 Бот-помощник для управления предложениями новостей в Telegram канал. Позволяет пользователям отправлять новости на модерацию, а администратору - одобрять или отклонять их перед публикацией в канале.
 
@@ -55,7 +55,7 @@
 
 1. Клонируйте репозиторий:
 
-git clone https://github.com/yourusername/telegram-channel-helper-bot.git
+git clone https://github.com/Xfervent123/channel-helper-telegram-bot.git
 cd telegram-channel-helper-bot
 
 2. Создайте виртуальное окружение:
