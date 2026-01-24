@@ -40,7 +40,7 @@ def get_user_quick_commands_kb() -> ReplyKeyboardMarkup:
         KeyboardButton(text="📊 Моя статистика")
     )
     builder.row(
-        KeyboardButton(text="📋 Главное меню")
+        KeyboardButton(text="⏳ На рассмотрении")
     )
     
     return builder.as_markup(resize_keyboard=True)
@@ -122,10 +122,29 @@ def get_cancel_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_back_to_main_kb() -> InlineKeyboardMarkup:
-    """Кнопка возврата в главное меню"""
+def get_empty_inline_kb() -> InlineKeyboardMarkup:
+    """Пустая inline-клавиатура (убирает кнопки под сообщением)"""
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+
+def get_pending_submissions_kb(submissions: list) -> InlineKeyboardMarkup:
+    """Клавиатура со списком ожидающих предложений"""
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="◀️ Главное меню", callback_data="back_to_main")
-    )
+
+    for submission in submissions:
+        content = submission.get('content') or ""
+        if submission.get('content_type') != 'text':
+            content_preview = f"📎 {(submission.get('content_type') or 'media').title()}"
+        else:
+            content_preview = (content[:50] + "...") if len(content) > 50 else (content or "(пусто)")
+
+        button_text = f"📄 {content_preview}"
+
+        builder.row(
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"view_submission_{submission['id']}"
+            )
+        )
+
     return builder.as_markup()

@@ -13,13 +13,13 @@ from config import BOT_TOKEN
 from database import db
 from states import AdminSetup, ChannelSetup, SubmissionStates
 from keyboards import (
-    get_main_menu_kb,
     get_user_quick_commands_kb,
     get_admin_quick_commands_kb,
     get_forward_choice_kb,
     get_admin_decision_kb,
     get_cancel_kb,
-    get_back_to_main_kb
+    get_pending_submissions_kb,
+    get_empty_inline_kb,
 )
 
 # Настройка логирования
@@ -29,6 +29,10 @@ logging.basicConfig(
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
+
+# Полностью отключаем логирование ошибок polling для aiogram
+logging.getLogger('aiogram.dispatcher').setLevel(logging.CRITICAL)
+logging.getLogger('aiogram.event').setLevel(logging.CRITICAL)
 
 # Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
@@ -132,13 +136,8 @@ async def cmd_start(message: Message, state: FSMContext):
         )
         await message.answer(
             welcome_text,
-            reply_markup=get_main_menu_kb(True, pending_count),
+            reply_markup=get_admin_quick_commands_kb(),
             parse_mode="HTML"
-        )
-        # Устанавливаем быстрые команды
-        await message.answer(
-            "Используйте кнопки ниже для быстрой навигации:",
-            reply_markup=get_admin_quick_commands_kb()
         )
     else:
         stats = await db.get_user_stats(user_id)
@@ -151,13 +150,8 @@ async def cmd_start(message: Message, state: FSMContext):
         )
         await message.answer(
             welcome_text,
-            reply_markup=get_main_menu_kb(False),
+            reply_markup=get_user_quick_commands_kb(),
             parse_mode="HTML"
-        )
-        # Устанавливаем быстрые команды
-        await message.answer(
-            "Используйте кнопки ниже для быстрой навигации:",
-            reply_markup=get_user_quick_commands_kb()
         )
 
 
@@ -198,7 +192,7 @@ async def quick_main_menu(message: Message, state: FSMContext):
         )
         await message.answer(
             text,
-            reply_markup=get_main_menu_kb(True, pending_count),
+            reply_markup=get_admin_quick_commands_kb(),
             parse_mode="HTML"
         )
     else:
@@ -212,7 +206,7 @@ async def quick_main_menu(message: Message, state: FSMContext):
         )
         await message.answer(
             text,
-            reply_markup=get_main_menu_kb(False),
+            reply_markup=get_user_quick_commands_kb(),
             parse_mode="HTML"
         )
 
@@ -275,24 +269,60 @@ async def quick_my_stats(message: Message):
     )
 
 
+async def _handle_my_pending(message: Message):
+    """Показать пользователю его предложения на рассмотрении."""
+    if await db.is_user_banned(message.from_user.id):
+        await message.answer("❌ Вы заблокированы.", reply_markup=get_user_quick_commands_kb())
+        return
+    channel_id = await db.get_channel_id()
+    if not channel_id:
+        await message.answer(
+            "❌ Канал не подключен.",
+            reply_markup=get_user_quick_commands_kb()
+        )
+        return
+    submissions = await db.get_user_pending_submissions(message.from_user.id)
+    if not submissions:
+        await message.answer(
+            "📭 Нет предложений на рассмотрении.",
+            reply_markup=get_user_quick_commands_kb()
+        )
+        return
+    text = f"⏳ Ваших предложений на рассмотрении: {len(submissions)}\n\nВыберите для просмотра:"
+    await message.answer(
+        text,
+        reply_markup=get_pending_submissions_kb(submissions)
+    )
+
+
+@router.message(F.text == "⏳ На рассмотрении")
+async def quick_my_pending(message: Message, state: FSMContext):
+    """Быстрая команда: Мои предложения на рассмотрении"""
+    await state.clear()
+    await _handle_my_pending(message)
+
+
 @router.message(F.text == "📬 Ожидающие")
 async def quick_pending(message: Message):
     """Быстрая команда: Ожидающие"""
     if not await is_admin(message.from_user.id):
         return
-    
-    pending_count = await db.get_pending_submissions_count()
-    
-    if pending_count == 0:
+
+    # Получаем все ожидающие предложения
+    submissions = await db.get_pending_submissions()
+
+    if not submissions:
         await message.answer(
             "📭 Нет ожидающих предложений",
             reply_markup=get_admin_quick_commands_kb()
         )
     else:
+        text = f"📬 Ожидающих предложений: {len(submissions)}\n\n" \
+               "Выберите предложение для просмотра:"
+
         await message.answer(
-            f"📬 Ожидающих предложений: {pending_count}\n\n"
-            "Новые предложения будут приходить автоматически.",
-            reply_markup=get_admin_quick_commands_kb()
+            text,
+            reply_markup=get_pending_submissions_kb(submissions)
         )
 
 
@@ -352,10 +382,10 @@ async def quick_change_channel(message: Message, state: FSMContext):
     
     await message.answer(
         "🔗 Отправьте:\n"
-        "1. Инвайт-ссылку на канал\n"
-        "2. Username канала (@channel)\n"
-        "3. ID канала\n\n"
-        "⚠️ Убедитесь, что бот добавлен в канал как администратор!",
+        "1. Инвайт-ссылку на канал или группу\n"
+        "2. Username (@channel или @group)\n"
+        "3. ID канала/группы\n\n"
+        "⚠️ Бот должен быть админом!",
         reply_markup=get_cancel_kb()
     )
     await state.set_state(ChannelSetup.waiting_for_invite)
@@ -395,11 +425,11 @@ async def cmd_setup_channel(message: Message, state: FSMContext):
         return
     
     await message.answer(
-        "🔗 Отправьте:\n"
-        "1. Инвайт-ссылку на канал (https://t.me/...)\n"
-        "2. Username канала (@channel)\n"
-        "3. ID канала (например: -1001234567890)\n\n"
-        "⚠️ Убедитесь, что бот добавлен в канал как администратор с правом публикации!",
+            "🔗 Отправьте:\n"
+            "1. Инвайт-ссылку на канал или группу (https://t.me/...)\n"
+            "2. Username (@channel или @group)\n"
+            "3. ID (например: -1001234567890)\n\n"
+            "⚠️ Бот должен быть админом с правом публикации!",
         reply_markup=get_cancel_kb()
     )
     await state.set_state(ChannelSetup.waiting_for_invite)
@@ -426,19 +456,19 @@ async def process_channel_invite(message: Message, state: FSMContext):
             channel_id = f"@{username}" if not username.startswith('@') else username
         else:
             await message.answer(
-                "❌ Неверный формат. Отправьте корректную ссылку, username или ID канала.",
+                "❌ Неверный формат. Отправьте ссылку, username или ID канала/группы.",
                 reply_markup=get_cancel_kb()
             )
             return
         
-        # Проверяем доступ к каналу
+        # Проверяем доступ к каналу/группе
         try:
             chat = await bot.get_chat(channel_id)
             
-            # Проверяем, что это канал
-            if chat.type != 'channel':
+            # Поддерживаем каналы и супергруппы
+            if chat.type not in ('channel', 'supergroup'):
                 await message.answer(
-                    "❌ Это не канал. Отправьте ссылку на канал.",
+                    "❌ Поддерживаются только каналы и супергруппы.",
                     reply_markup=get_cancel_kb()
                 )
                 return
@@ -447,23 +477,24 @@ async def process_channel_invite(message: Message, state: FSMContext):
             bot_member = await bot.get_chat_member(chat.id, bot.id)
             if bot_member.status not in ['administrator', 'creator']:
                 await message.answer(
-                    "❌ Бот не является администратором канала.\n"
-                    "Добавьте бота в канал как администратора с правом публикации сообщений!",
+                    "❌ Бот не администратор.\n"
+                    "Добавьте бота в канал/группу как администратора с правом публикации!",
                     reply_markup=get_cancel_kb()
                 )
                 return
             
-            # Сохраняем канал
+            # Сохраняем канал/группу
             await db.set_channel_id(chat.id)
             
-            pending_count = await db.get_pending_submissions_count()
+            dest_type = "группа" if chat.type == 'supergroup' else "канал"
+            connected = "подключена" if chat.type == 'supergroup' else "подключен"
             
             await message.answer(
-                f"✅ Канал успешно подключен!\n\n"
+                f"✅ {dest_type.capitalize()} успешно {connected}!\n\n"
                 f"📢 Название: {chat.title}\n"
                 f"🆔 ID: {chat.id}\n\n"
                 f"Теперь пользователи могут отправлять предложения!",
-                reply_markup=get_main_menu_kb(True, pending_count),
+                reply_markup=get_admin_quick_commands_kb(),
                 parse_mode="HTML"
             )
             await state.clear()
@@ -471,11 +502,11 @@ async def process_channel_invite(message: Message, state: FSMContext):
             
         except TelegramBadRequest as e:
             await message.answer(
-                f"❌ Ошибка доступа к каналу.\n"
+                f"❌ Ошибка доступа к каналу/группе.\n"
                 f"Убедитесь, что:\n"
-                f"1. Бот добавлен в канал\n"
-                f"2. Бот является администратором\n"
-                f"3. У бота есть право публикации\n\n"
+                f"1. Бот добавлен в чат\n"
+                f"2. Бот — администратор\n"
+                f"3. Есть право публикации сообщений\n\n"
                 f"Ошибка: {e}",
                 reply_markup=get_cancel_kb()
             )
@@ -510,7 +541,7 @@ async def start_submission(callback: CallbackQuery, state: FSMContext):
     if not channel_id:
         await callback.message.edit_text(
             "❌ Канал ещё не подключен. Обратитесь к администратору.",
-            reply_markup=get_back_to_main_kb()
+            reply_markup=get_empty_inline_kb()
         )
         return
     
@@ -531,10 +562,23 @@ async def start_submission(callback: CallbackQuery, state: FSMContext):
 @router.message(SubmissionStates.waiting_for_content)
 async def process_submission_content(message: Message, state: FSMContext):
     """Обработка контента предложения"""
+    # Кнопки быстрых команд работают даже в процессе отправки — выходим из состояния
+    if message.content_type == "text" and message.text and message.text.strip() == "⏳ На рассмотрении":
+        await state.clear()
+        await _handle_my_pending(message)
+        return
+
     # Сохраняем данные сообщения
+    content_data = ""
+    if message.content_type == "text":
+        content_data = message.text
+    elif message.content_type in ["photo", "video", "document", "animation"]:
+        content_data = message.caption or ""
+
     await state.update_data(
         message_id=message.message_id,
         content_type=message.content_type,
+        content=content_data,
         chat_id=message.chat.id
     )
     
@@ -558,13 +602,14 @@ async def process_forward_choice(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     message_id = data.get('message_id')
     content_type = data.get('content_type')
-    
+    content = data.get('content', '')
+
     # Сохраняем предложение в базу
     submission_id = await db.add_submission(
         user_id=callback.from_user.id,
         message_id=message_id,
         content_type=content_type,
-        content=json.dumps({'chat_id': callback.from_user.id}),
+        content=content,
         allow_forward=allow_forward
     )
     
@@ -572,7 +617,7 @@ async def process_forward_choice(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "✅ Ваше предложение отправлено на модерацию!\n\n"
         "Вы получите уведомление, когда администратор примет решение.",
-        reply_markup=get_back_to_main_kb()
+        reply_markup=get_empty_inline_kb()
     )
     
     # Отправляем администратору
@@ -621,10 +666,12 @@ async def process_forward_choice(callback: CallbackQuery, state: FSMContext):
                     reply_markup=get_admin_decision_kb(submission_id, allow_forward)
                 )
             else:
-                # Для текста отправляем заголовок + текст
+                # Для текста отправляем заголовок + текст из базы данных
+                submission = await db.get_submission(submission_id)
+                content_text = submission['content'] if submission and submission['content'] else "Текст не найден"
                 await bot.send_message(
                     chat_id=admin_id,
-                    text=header_text + "📄 <b>Текст предложения:</b>\n\n" + callback.message.text,
+                    text=header_text + "📄 <b>Текст предложения:</b>\n\n" + content_text,
                     parse_mode="HTML",
                     reply_markup=get_admin_decision_kb(submission_id, allow_forward)
                 )
@@ -689,8 +736,7 @@ async def approve_submission(callback: CallbackQuery):
     
     # Публикуем в канал
     try:
-        content_data = json.loads(submission['content'])
-        user_chat_id = content_data['chat_id']
+        user_chat_id = submission['user_id']
         
         if publish_type == 'with' and submission['allow_forward']:
             # Публикация с автором (пересылка)
@@ -716,8 +762,7 @@ async def approve_submission(callback: CallbackQuery):
         try:
             await bot.send_message(
                 chat_id=submission['user_id'],
-                text=f"✅ Ваше предложение одобрено и опубликовано с {decision_text}!",
-                reply_markup=get_back_to_main_kb()
+                text=f"✅ Ваше предложение одобрено и опубликовано с {decision_text}!"
             )
         except Exception as e:
             logger.error(f"Ошибка уведомления пользователя: {e}")
@@ -772,8 +817,7 @@ async def reject_submission(callback: CallbackQuery):
     try:
         await bot.send_message(
             chat_id=submission['user_id'],
-            text=f"❌ Ваше предложение было отклонено.",
-            reply_markup=get_back_to_main_kb()
+            text="❌ Ваше предложение было отклонено."
         )
     except Exception as e:
         logger.error(f"Ошибка уведомления пользователя: {e}")
@@ -798,61 +842,6 @@ async def reject_submission(callback: CallbackQuery):
 
 # ============= НАВИГАЦИЯ ПО МЕНЮ =============
 
-@router.callback_query(F.data == "back_to_main")
-async def back_to_main_menu(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню"""
-    await callback.answer()
-    await state.clear()
-    
-    admin = await is_admin(callback.from_user.id)
-    channel_id = await db.get_channel_id()
-    
-    # Если канал не подключен
-    if not channel_id:
-        if admin:
-            await callback.message.edit_text(
-                "⚠️ <b>Канал не подключен!</b>\n\n"
-                "Для начала работы бота необходимо подключить канал.\n"
-                "Используйте команду /setup_channel",
-                parse_mode="HTML"
-            )
-        else:
-            await callback.message.edit_text(
-                "⚠️ <b>Бот ещё не настроен</b>\n\n"
-                "Администратор должен подключить канал.\n"
-                "Пожалуйста, подождите.",
-                parse_mode="HTML"
-            )
-        return
-    
-    if admin:
-        pending_count = await db.get_pending_submissions_count()
-        text = (
-            "⚙️ <b>Панель администратора</b>\n\n"
-            f"📬 Ожидающих заявок: {pending_count}\n"
-            f"📢 Канал подключен"
-        )
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_main_menu_kb(True, pending_count),
-            parse_mode="HTML"
-        )
-    else:
-        stats = await db.get_user_stats(callback.from_user.id)
-        text = (
-            f"📊 <b>Ваша статистика:</b>\n\n"
-            f"• Всего предложений: {stats['total']}\n"
-            f"• Одобрено: {stats['approved']}\n"
-            f"• Отклонено: {stats['rejected']}\n"
-            f"• Ожидает: {stats['pending']}\n"
-        )
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_main_menu_kb(False),
-            parse_mode="HTML"
-        )
-
-
 @router.callback_query(F.data == "my_stats")
 async def show_my_stats(callback: CallbackQuery):
     """Показ статистики пользователя"""
@@ -874,7 +863,7 @@ async def show_my_stats(callback: CallbackQuery):
     
     await callback.message.edit_text(
         text,
-        reply_markup=get_back_to_main_kb(),
+        reply_markup=get_empty_inline_kb(),
         parse_mode="HTML"
     )
 
@@ -925,38 +914,128 @@ async def show_bot_stats(callback: CallbackQuery):
     
     await callback.message.edit_text(
         text,
-        reply_markup=get_back_to_main_kb(),
+        reply_markup=get_empty_inline_kb(),
         parse_mode="HTML"
     )
 
 
 @router.callback_query(F.data == "view_pending")
 async def view_pending(callback: CallbackQuery):
-    """Просмотр ожидающих"""
+    """Просмотр списка ожидающих предложений"""
     await callback.answer()
-    
+
     if not await is_admin(callback.from_user.id):
         await callback.answer("❌ У вас нет прав!", show_alert=True)
         return
-    
-    pending_count = await db.get_pending_submissions_count()
-    
-    if pending_count == 0:
+
+    # Получаем все ожидающие предложения
+    submissions = await db.get_pending_submissions()
+
+    if not submissions:
         await callback.message.edit_text(
             "📭 Нет ожидающих предложений",
-            reply_markup=get_back_to_main_kb()
+            reply_markup=get_empty_inline_kb()
         )
     else:
+        text = f"📬 Ожидающих предложений: {len(submissions)}\n\n" \
+               "Выберите предложение для просмотра:"
+
         await callback.message.edit_text(
-            f"📬 Ожидающих предложений: {pending_count}\n\n"
-            "Новые предложения будут приходить автоматически.",
-            reply_markup=get_back_to_main_kb()
+            text,
+            reply_markup=get_pending_submissions_kb(submissions)
         )
+
+
+@router.callback_query(F.data.startswith("view_submission_"))
+async def view_submission(callback: CallbackQuery):
+    """Просмотр конкретного предложения (админ — с решениями, пользователь — только свои ожидающие)"""
+    await callback.answer()
+
+    submission_id = int(callback.data.split("_")[-1])
+    submission = await db.get_submission(submission_id)
+    if not submission:
+        await callback.message.edit_text(
+            "❌ Предложение не найдено",
+            reply_markup=get_empty_inline_kb()
+        )
+        return
+
+    is_adm = await is_admin(callback.from_user.id)
+
+    if is_adm:
+        # Админ: показываем с кнопками одобрения/отклонения
+        user_info = await get_user_info(submission['user_id'])
+        user_name = f"{user_info['first_name']}"
+        if user_info.get('username'):
+            user_name += f" (@{user_info['username']})"
+        forward_status = "✅ Разрешена публикация с автором" if submission['allow_forward'] else "🔒 Только анонимно"
+        header_text = (
+            f"┌─ 📬 <b>Предложение #{submission_id}</b>\n"
+            f"│\n"
+            f"│ 👤 От: {user_name}\n"
+            f"│ 🔐 {forward_status}\n"
+            f"│ 📅 {submission['created_at'][:19]}\n"
+            f"└─────────────────────\n\n"
+        )
+        decision_kb = get_admin_decision_kb(submission_id, submission['allow_forward'])
+    else:
+        # Пользователь: только свои ожидающие, без кнопок решения
+        if submission['user_id'] != callback.from_user.id:
+            await callback.answer("❌ Нет доступа к этому предложению.", show_alert=True)
+            return
+        if submission['status'] != 'pending':
+            await callback.answer("Это предложение уже рассмотрено.", show_alert=True)
+            return
+        header_text = (
+            f"┌─ ⏳ <b>Предложение</b>\n"
+            f"│ Ожидает рассмотрения\n"
+            f"│ 📅 {submission['created_at'][:19]}\n"
+            f"└─────────────────────\n\n"
+        )
+        decision_kb = get_empty_inline_kb()
+
+    try:
+        if submission['content_type'] in ['photo', 'video', 'document', 'animation']:
+            cap = (submission['content'] or "").strip()
+            new_caption = header_text + (cap if cap else "")
+            await bot.copy_message(
+                chat_id=callback.from_user.id,
+                from_chat_id=submission['user_id'],
+                message_id=submission['message_id'],
+                caption=new_caption,
+                parse_mode="HTML",
+                reply_markup=decision_kb
+            )
+        else:
+            content_text = submission['content'] if submission['content'] else "Текст не найден"
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text=header_text + "📄 <b>Текст предложения:</b>\n\n" + content_text,
+                parse_mode="HTML",
+                reply_markup=decision_kb
+            )
+    except Exception as e:
+        logger.error(f"Ошибка отправки предложения: {e}")
+        try:
+            await bot.copy_message(
+                chat_id=callback.from_user.id,
+                from_chat_id=submission['user_id'],
+                message_id=submission['message_id'],
+                caption=header_text if submission['content_type'] != 'text' else None,
+                parse_mode="HTML",
+                reply_markup=decision_kb
+            )
+        except Exception as e2:
+            logger.error(f"Ошибка запасного варианта: {e2}")
+            await callback.message.edit_text(
+                f"❌ Ошибка загрузки предложения: {str(e)}",
+                reply_markup=get_empty_inline_kb()
+            )
 
 
 @router.callback_query(F.data == "change_channel")
 async def change_channel(callback: CallbackQuery, state: FSMContext):
-    """Смена канала"""
+    """Смена канала/группы"""
     await callback.answer()
     
     if not await is_admin(callback.from_user.id):
@@ -965,10 +1044,10 @@ async def change_channel(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.edit_text(
         "🔗 Отправьте:\n"
-        "1. Инвайт-ссылку на канал\n"
-        "2. Username канала (@channel)\n"
-        "3. ID канала\n\n"
-        "⚠️ Убедитесь, что бот добавлен в канал как администратор!",
+        "1. Инвайт-ссылку на канал или группу\n"
+        "2. Username (@channel или @group)\n"
+        "3. ID канала/группы\n\n"
+        "⚠️ Бот должен быть админом!",
         reply_markup=get_cancel_kb()
     )
     await state.set_state(ChannelSetup.waiting_for_invite)
@@ -980,24 +1059,19 @@ async def cancel_action(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await state.clear()
     
-    admin = await is_admin(callback.from_user.id)
     channel_id = await db.get_channel_id()
     
     if not channel_id:
-        await callback.message.edit_text("❌ Действие отменено.")
+        await callback.message.edit_text(
+            "❌ Действие отменено.",
+            reply_markup=get_empty_inline_kb()
+        )
         return
     
-    if admin:
-        pending_count = await db.get_pending_submissions_count()
-        await callback.message.edit_text(
-            "❌ Действие отменено.",
-            reply_markup=get_main_menu_kb(True, pending_count)
-        )
-    else:
-        await callback.message.edit_text(
-            "❌ Действие отменено.",
-            reply_markup=get_main_menu_kb(False)
-        )
+    await callback.message.edit_text(
+        "❌ Действие отменено.",
+        reply_markup=get_empty_inline_kb()
+    )
 
 
 # ============= ЗАПУСК БОТА =============
@@ -1014,7 +1088,7 @@ async def on_startup():
         if not code:
             code = await db.generate_admin_code()
         print(f"\n{'='*50}")
-        print(f"🔐 КОД АДМИНИСТРАТОРА: {code}")
+        print(f"КОД АДМИНИСТРАТОРА: {code}")
         print(f"{'='*50}\n")
     else:
         logger.info(f"Администратор установлен: {admin_id}")

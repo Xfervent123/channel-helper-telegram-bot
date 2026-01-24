@@ -200,7 +200,7 @@ async def get_user_stats(user_id: int) -> dict:
     global _conn
     async with _conn.cursor() as cursor:
         await cursor.execute('''
-            SELECT 
+            SELECT
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'approved' THEN 1 ELSE 0 END) as approved,
                 SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END) as rejected,
@@ -217,7 +217,117 @@ async def get_user_stats(user_id: int) -> dict:
         }
 
 
+async def get_pending_submissions() -> list:
+    """Получение всех ожидающих предложений с информацией о пользователях"""
+    global _conn
+    async with _conn.cursor() as cursor:
+        await cursor.execute('''
+            SELECT s.*, u.username, u.first_name
+            FROM submissions s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            WHERE s.status = 'pending'
+            ORDER BY s.created_at ASC
+        ''')
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+async def get_user_pending_submissions(user_id: int) -> list:
+    """Получение ожидающих предложений конкретного пользователя"""
+    global _conn
+    async with _conn.cursor() as cursor:
+        await cursor.execute('''
+            SELECT id, content_type, content, created_at
+            FROM submissions
+            WHERE user_id = ? AND status = 'pending'
+            ORDER BY created_at ASC
+        ''', (user_id,))
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
 async def get_conn():
     """Получение соединения с базой данных"""
     global _conn
     return _conn
+
+
+class DatabaseManager:
+    """Менеджер базы данных"""
+
+    @property
+    def conn(self):
+        """Получение соединения с базой данных"""
+        return _conn
+
+    async def connect(self, db_name: str = DB_NAME):
+        """Подключение к базе данных"""
+        await connect(db_name)
+
+    async def close(self):
+        """Закрытие соединения"""
+        await close()
+
+    async def generate_admin_code(self) -> str:
+        """Генерация кода администратора"""
+        return await generate_admin_code()
+
+    async def get_setting(self, key: str) -> Optional[str]:
+        """Получение настройки"""
+        return await get_setting(key)
+
+    async def get_admin_id(self) -> Optional[int]:
+        """Получение ID администратора"""
+        return await get_admin_id()
+
+    async def set_admin(self, user_id: int):
+        """Установка администратора"""
+        await set_admin(user_id)
+
+    async def get_channel_id(self) -> Optional[int]:
+        """Получение ID канала"""
+        return await get_channel_id()
+
+    async def set_channel_id(self, channel_id: int):
+        """Установка ID канала"""
+        await set_channel_id(channel_id)
+
+    async def add_user(self, user_id: int, username: str = None, first_name: str = None):
+        """Добавление пользователя"""
+        await add_user(user_id, username, first_name)
+
+    async def is_user_banned(self, user_id: int) -> bool:
+        """Проверка, забанен ли пользователь"""
+        return await is_user_banned(user_id)
+
+    async def add_submission(self, user_id: int, message_id: int, content_type: str, content: str, allow_forward: bool) -> int:
+        """Добавление предложения"""
+        return await add_submission(user_id, message_id, content_type, content, allow_forward)
+
+    async def get_submission(self, submission_id: int):
+        """Получение предложения по ID"""
+        return await get_submission(submission_id)
+
+    async def update_submission_status(self, submission_id: int, status: str, admin_decision: str = None):
+        """Обновление статуса предложения"""
+        await update_submission_status(submission_id, status, admin_decision)
+
+    async def get_pending_submissions_count(self) -> int:
+        """Получение количества ожидающих предложений"""
+        return await get_pending_submissions_count()
+
+    async def get_user_stats(self, user_id: int) -> dict:
+        """Получение статистики пользователя"""
+        return await get_user_stats(user_id)
+
+    async def get_pending_submissions(self) -> list:
+        """Получение всех ожидающих предложений"""
+        return await get_pending_submissions()
+
+    async def get_user_pending_submissions(self, user_id: int) -> list:
+        """Получение ожидающих предложений конкретного пользователя"""
+        return await get_user_pending_submissions(user_id)
+
+
+# Создание экземпляра менеджера базы данных
+db = DatabaseManager()
